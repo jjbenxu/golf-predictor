@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tour Round Predictor</title>
+<style>
+  :root {
+    --bg: #f4f6f1; --card: #ffffff; --ink: #17241b; --muted: #5d6b61; --line: #dfe5dc;
+    --accent: #1f6b45; --accent-ink: #ffffff; --soft: #e6f0e8; --bar: #7fb593; --bar-hi: #1f6b45; --warn: #8a5a00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #101612; --card: #18211b; --ink: #e8efe9; --muted: #9aa89e; --line: #2a362d;
+      --accent: #4fae7b; --accent-ink: #08130c; --soft: #1f2d24; --bar: #3d7a58; --bar-hi: #7fd3a4; --warn: #e0b660; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 30px; line-height: 1.15; margin: 0 0 6px; letter-spacing: -0.02em; }
+  .lede { color: var(--muted); margin: 0 0 24px; max-width: 60ch; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+  form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+  label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 5px; }
+  input, select { width: 100%; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 9px; padding: 10px 12px; min-height: 44px; }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .hint { font-size: 12.5px; color: var(--muted); margin-top: 5px; min-height: 18px; }
+  .hint.bad { color: var(--warn); }
+  .full { grid-column: 1 / -1; }
+  button { font: inherit; font-weight: 650; background: var(--accent); color: var(--accent-ink); border: 0;
+    border-radius: 10px; padding: 12px 22px; min-height: 46px; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  #results { margin-top: 22px; display: none; }
+  .context { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .k { font-size: 13px; font-weight: 600; color: var(--muted); }
+  .v { font-size: 40px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; margin: 4px 0 2px;
+    font-variant-numeric: tabular-nums; }
+  .v small { font-size: 17px; font-weight: 600; color: var(--muted); letter-spacing: 0; }
+  .s { font-size: 13.5px; color: var(--muted); }
+  .hist { display: flex; align-items: flex-end; gap: 3px; height: 84px; margin-top: 14px; }
+  .hist div { flex: 1; background: var(--bar); border-radius: 3px 3px 0 0; min-height: 1px; }
+  .hist div.hi { background: var(--bar-hi); }
+  .axis { display: flex; gap: 3px; font-size: 11px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .axis span { flex: 1; text-align: center; }
+  details { margin-top: 22px; }
+  summary { cursor: pointer; font-weight: 650; }
+  details p, details li { color: var(--muted); font-size: 14.5px; }
+  footer { color: var(--muted); font-size: 12.5px; margin-top: 26px; }
+  @media (max-width: 640px) { form, .grid { grid-template-columns: 1fr; } h1 { font-size: 25px; } .v { font-size: 34px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Tour Round Predictor</h1>
+  <p class="lede">Pick a PGA Tour player, a course and the conditions. The model estimates the score, then plays the
+    tournament 10,000 times against a realistic field to work out the odds.</p>
+
+  <div class="card">
+    <form id="f" autocomplete="off">
+      <div>
+        <label for="player">Player</label>
+        <input id="player" list="players" placeholder="Start typing a name">
+        <datalist id="players"></datalist>
+        <div class="hint" id="playerHint"></div>
+      </div>
+      <div>
+        <label for="course">Course</label>
+        <select id="course"></select>
+        <div class="hint" id="courseHint"></div>
+      </div>
+      <div>
+        <label for="weather">Weather</label>
+        <select id="weather">
+          <option value="85,0">Dry and hot (85°F)</option>
+          <option value="70,0" selected>Dry and mild (70°F)</option>
+          <option value="52,0">Dry and cold (52°F)</option>
+          <option value="64,3">Light rain</option>
+          <option value="60,12">Heavy rain</option>
+        </select>
+      </div>
+      <div>
+        <label for="wind">Wind</label>
+        <select id="wind">
+          <option value="4">Calm (under 5 mph)</option>
+          <option value="8" selected>Light breeze (about 8 mph)</option>
+          <option value="13">Breezy (about 13 mph)</option>
+          <option value="18">Windy (about 18 mph)</option>
+          <option value="25">Very windy (25 mph or more)</option>
+        </select>
+      </div>
+      <div>
+        <label for="back">Position after the cut (optional)</label>
+        <select id="back">
+          <option value="">Not specified</option>
+          <option value="0">Tied for the lead</option>
+          <option value="1">1 shot back</option><option value="2">2 shots back</option>
+          <option value="3">3 shots back</option><option value="4">4 shots back</option>
+          <option value="5">5 shots back</option><option value="6">6 shots back</option>
+          <option value="8">8 shots back</option><option value="10">10 shots back</option>
+        </select>
+        <div class="hint">Sharpens the "win after making the cut" number.</div>
+      </div>
+      <div style="align-self:center">
+        <button id="go" type="submit">Run the model</button>
+      </div>
+    </form>
+  </div>
+
+  <section id="results" aria-live="polite">
+    <p class="context" id="ctx"></p>
+    <div class="grid">
+      <div class="card full">
+        <div class="k">1 · Predicted score for the round</div>
+        <div class="v" id="score"></div>
+        <div class="s" id="scoreSub"></div>
+        <div class="hist" id="hist" role="img" aria-label="Chart of how often each score came up"></div>
+        <div class="axis" id="axis"></div>
+      </div>
+      <div class="card">
+        <div class="k">2 · Chance of winning the round</div>
+        <div class="v" id="low"></div>
+        <div class="s" id="lowSub"></div>
+      </div>
+      <div class="card">
+        <div class="k">3 · Chance of making the cut</div>
+        <div class="v" id="cut"></div>
+        <div class="s" id="cutSub"></div>
+      </div>
+      <div class="card full">
+        <div class="k">4 · Chance of winning the tournament, having made the cut</div>
+        <div class="v" id="win"></div>
+        <div class="s" id="winSub"></div>
+      </div>
+    </div>
+  </section>
+
+  <details>
+    <summary>How this works, and how far to trust it</summary>
+    <p id="about"></p>
+    <ul>
+      <li><b>Score.</b> Course difficulty, plus the effect of wind, rain and temperature, plus how many strokes better
+        or worse than an average tour entrant the player has been lately (recent rounds count more).</li>
+      <li><b>Odds.</b> The tournament is played 10,000 times on your device against the players who entered the most
+        recent edition at that course. Every player gets realistic round-to-round luck.</li>
+      <li><b>Winning the round</b> means posting the lowest score of the day, including ties.</li>
+      <li><b>Weather moves the score more than the odds.</b> Everyone plays in the same conditions, and the data showed
+        no reliable sign that particular players gain or lose in wind. Wind does add randomness, which slightly trims
+        favourites' chances.</li>
+      <li><b>Golf is mostly luck over one round.</b> Skill explains only a small share of a single round, so even the
+        best player in the world rarely tops 20% to win. Tested on the 2026 season, players the model gave a 60 to 80%
+        chance of making the cut made it about that often.</li>
+      <li>The model does not know about injuries, course history or current form beyond results. For fun only, not betting advice.</li>
+    </ul>
+  </details>
+  <footer id="foot"></footer>
+</main>
+
+<script src="model.js"></script>
+<script>
+(function () {
+  var M = window.GOLF_MODEL, C = M.coef, $ = function (id) { return document.getElementById(id); };
+  var byName = {};
+  M.players.forEach(function (p, i) { if (p.sel) byName[p.n.toLowerCase()] = i; });
+  $("players").innerHTML = M.players.filter(function (p) { return p.sel; })
+    .map(function (p) { return p.n; }).sort().map(function (n) { return '<option value="' + n.replace(/"/g, "&quot;") + '">'; }).join("");
+  $("course").innerHTML = M.courses.map(function (c, i) {
+    return '<option value="' + i + '">' + c.n + " (" + c.ev + ")</option>"; }).join("");
+  $("player").value = M.players[0].n;
+  $("about").textContent = "Built from " + M.stats.rounds.toLocaleString() + " PGA Tour rounds across " + M.stats.events +
+    " tournaments since 2021, matched to the weather on the day. Results are current to " + M.asOf + ".";
+  $("foot").textContent = "Scores from public leaderboards; weather from Open-Meteo. A hobby project.";
+
+  function fmtPar(x) { var r = Math.round(x * 10) / 10; return r === 0 ? "level par" : (r > 0 ? "+" : "−") + Math.abs(r).toFixed(1); }
+  function pct(x) {
+    var v = x * 100;
+    if (v > 0 && v < 0.1) return "<0.1%";
+    if (v > 99.9 && v < 100) return ">99.9%";
+    return (v < 10 ? v.toFixed(1) : v.toFixed(0)) + "%";
+  }
+  function playerHint() {
+    var i = byName[$("player").value.trim().toLowerCase()], h = $("playerHint");
+    if (i === undefined) { h.textContent = $("player").value ? "Pick a player from the list." : ""; h.className = "hint bad"; return; }
+    var p = M.players[i], s = -p.s;
+    h.className = "hint";
+    h.textContent = Math.abs(s).toFixed(1) + " strokes a round " + (s >= 0 ? "better" : "worse") +
+      " than the average tour entrant · " + p.r + " rounds on record";
+  }
+  function courseHint() {
+    var c = M.courses[+$("course").value];
+    $("courseHint").textContent = (c.loc ? c.loc + " · " : "") + "par " + c.par + " · plays " + fmtPar(c.b) +
+      " for an average entrant · " + (c.cutRound ? "cut to top " + c.cutCount + " and ties" : "no cut");
+  }
+  $("player").addEventListener("input", playerHint);
+  $("course").addEventListener("change", courseHint);
+  playerHint(); courseHint();
+
+  var spare = null;
+  function gauss() {
+    if (spare !== null) { var s = spare; spare = null; return s; }
+    var u, v, r;
+    do { u = Math.random() * 2 - 1; v = Math.random() * 2 - 1; r = u * u + v * v; } while (r >= 1 || r === 0);
+    var f = Math.sqrt(-2 * Math.log(r) / r); spare = v * f; return u * f;
+  }
+
+  function simulate(pi, c, wind, temp, rain, back, N) {
+    var ids = c.f.filter(function (i) { return i !== pi; });
+    var n = ids.length + c.fx + 1, me = n - 1;
+    var skill = new Float64Array(n), sd = new Float64Array(n);
+    var dw = wind - C.windRef, baseSd = Math.sqrt(Math.max(C.v0 + C.v1 * dw, 4));
+    var cond = c.b + C.wind * dw + C.rain * rain + C.temp * (temp - C.tempRef);
+    for (var i = 0; i < n; i++) {
+      var p = i < ids.length ? M.players[ids[i]] : (i === me ? M.players[pi] : null);
+      skill[i] = cond + (p ? p.s + p.w * dw : C.newcomer);
+      sd[i] = baseSd * (p ? p.v : 1);
+    }
+    var hasCut = c.cutRound > 0 && c.cutCount > 0 && c.cutCount < n, cutRound = hasCut ? c.cutRound : 2;
+    var tot = new Float64Array(n), sorted = new Float64Array(n), made = new Uint8Array(n);
+    var hist = {}, low = 0, cuts = 0, winShare = 0, winBack = 0;
+    for (var s = 0; s < N; s++) {
+      var bestOther = 1e9, mine = 0, r, i2;
+      for (i2 = 0; i2 < n; i2++) {                       // round 1
+        var sc = Math.round(c.par + skill[i2] + sd[i2] * gauss());
+        tot[i2] = sc;
+        if (i2 === me) mine = sc; else if (sc < bestOther) bestOther = sc;
+      }
+      hist[mine] = (hist[mine] || 0) + 1;
+      if (mine <= bestOther) low++;
+      for (r = 2; r <= cutRound; r++)
+        for (i2 = 0; i2 < n; i2++) tot[i2] += Math.round(c.par + skill[i2] + sd[i2] * gauss());
+      var line = 1e9;
+      if (hasCut) { sorted.set(tot); sorted.sort(); line = sorted[c.cutCount - 1]; }
+      var lead = 1e9;
+      for (i2 = 0; i2 < n; i2++) { made[i2] = tot[i2] <= line ? 1 : 0; if (i2 !== me && made[i2] && tot[i2] < lead) lead = tot[i2]; }
+      if (made[me]) cuts++;
+      var alt = back === null ? 0 : lead + back, wk = C.wkend;
+      for (r = cutRound + 1; r <= 4; r++)
+        for (i2 = 0; i2 < n; i2++) {
+          if (!made[i2] && i2 !== me) continue;
+          var x = Math.round(c.par + skill[i2] + wk + sd[i2] * gauss());
+          tot[i2] += x; if (i2 === me) alt += x;
+        }
+      var best = 1e9, ties = 0;
+      for (i2 = 0; i2 < n; i2++) if (i2 !== me && made[i2]) { if (tot[i2] < best) { best = tot[i2]; ties = 1; } else if (tot[i2] === best) ties++; }
+      if (made[me]) { if (tot[me] < best) winShare += 1; else if (tot[me] === best) winShare += 1 / (ties + 1); }
+      if (back !== null) { if (alt < best) winBack += 1; else if (alt === best) winBack += 1 / (ties + 1); }
+    }
+    return { mean: c.par + skill[me], sd: sd[me], hist: hist, low: low / N, cut: hasCut ? cuts / N : null,
+      winGivenCut: cuts ? winShare / cuts : 0, win: winShare / N, winBack: back === null ? null : winBack / N, n: n };
+  }
+
+  $("f").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var pi = byName[$("player").value.trim().toLowerCase()];
+    if (pi === undefined) { playerHint(); $("player").focus(); return; }
+    var c = M.courses[+$("course").value], w = $("weather").value.split(","), wind = +$("wind").value;
+    var back = $("back").value === "" ? null : +$("back").value, btn = $("go");
+    btn.disabled = true; btn.textContent = "Simulating…";
+    setTimeout(function () {
+      var R = simulate(pi, c, wind, +w[0], +w[1], back, 10000), p = M.players[pi];
+      $("ctx").textContent = p.n + " at " + c.n + " · " + $("weather").selectedOptions[0].text.toLowerCase() + ", " +
+        $("wind").selectedOptions[0].text.toLowerCase() + " · field of " + R.n + " based on the " + c.yr + " " + c.ev;
+      $("score").innerHTML = R.mean.toFixed(1) + " <small>" + fmtPar(R.mean - c.par) + " on a par " + c.par + "</small>";
+      var lo = Math.round(R.mean - 1.2816 * R.sd), hi = Math.round(R.mean + 1.2816 * R.sd);
+      $("scoreSub").textContent = "Four rounds in five should land between " + lo + " and " + hi + ".";
+      var keys = Object.keys(R.hist).map(Number).sort(function (a, b) { return a - b; });
+      var a = Math.max(keys[0], Math.round(R.mean) - 7), b = Math.min(keys[keys.length - 1], Math.round(R.mean) + 7), mx = 0, k;
+      for (k = a; k <= b; k++) mx = Math.max(mx, R.hist[k] || 0);
+      var bars = "", ax = "";
+      for (k = a; k <= b; k++) {
+        var share = (R.hist[k] || 0) / 10000;
+        bars += '<div class="' + (k === Math.round(R.mean) ? "hi" : "") + '" style="height:' + (100 * (R.hist[k] || 0) / mx).toFixed(1) +
+          '%" title="' + k + ": " + pct(share) + '"></div>';
+        ax += "<span>" + k + "</span>";
+      }
+      $("hist").innerHTML = bars; $("axis").innerHTML = ax;
+      $("low").textContent = pct(R.low);
+      $("lowSub").textContent = "Lowest score of the day, ties included, against " + (R.n - 1) + " others.";
+      if (R.cut === null) { $("cut").textContent = "No cut"; $("cutSub").textContent = "Everyone in this event plays all four rounds."; }
+      else { $("cut").textContent = pct(R.cut); $("cutSub").textContent = "Top " + c.cutCount + " and ties after round " + c.cutRound + "."; }
+      if (back !== null) {
+        $("win").textContent = pct(R.winBack);
+        $("winSub").textContent = "Starting the closing rounds " + $("back").selectedOptions[0].text.toLowerCase() +
+          ". Without that information: " + pct(R.winGivenCut) + ". From the first tee: " + pct(R.win) + ".";
+      } else {
+        $("win").textContent = pct(R.winGivenCut);
+        $("winSub").textContent = (R.cut === null ? "" : "Averaged over every way the first rounds could go. ") +
+          "From the first tee: " + pct(R.win) + ". Ties are settled by a coin-flip playoff.";
+      }
+      $("results").style.display = "block";
+      btn.disabled = false; btn.textContent = "Run the model";
+      $("results").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 30);
+  });
+})();
+</script>
+</body>
+</html>
