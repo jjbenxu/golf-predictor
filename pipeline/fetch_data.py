@@ -3,7 +3,7 @@
 Output: data/events.json  (one record per tournament, with rounds and daily weather)
 Run:    python3 pipeline/fetch_data.py
 """
-import json, os, sys, time, urllib.request, urllib.parse
+import json, math, os, sys, time, urllib.request, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
@@ -135,7 +135,7 @@ def add_weather(ev):
     s = (datetime.fromisoformat(start) - timedelta(days=1)).date().isoformat()
     en = (datetime.fromisoformat(end) + timedelta(days=1)).date().isoformat()
     d = get("https://archive-api.open-meteo.com/v1/archive?latitude=%s&longitude=%s&start_date=%s&end_date=%s"
-            "&hourly=temperature_2m,precipitation,wind_speed_10m,wind_gusts_10m"
+            "&hourly=temperature_2m,precipitation,wind_speed_10m,wind_gusts_10m,wind_direction_10m"
             "&wind_speed_unit=mph&temperature_unit=fahrenheit&timezone=auto" % (loc[0], loc[1], s, en))
     if not d or "hourly" not in d:
         return ev
@@ -146,10 +146,16 @@ def add_weather(ev):
         day, hour = ts[:10], int(ts[11:13])
         if 7 <= hour <= 18 and h["wind_speed_10m"][i] is not None:
             days.setdefault(day, []).append((h["wind_speed_10m"][i], h["wind_gusts_10m"][i] or 0,
-                                             h["precipitation"][i] or 0, h["temperature_2m"][i]))
+                                             h["precipitation"][i] or 0, h["temperature_2m"][i],
+                                             h["wind_direction_10m"][i] or 0))
     for day, v in days.items():
         n = len(v)
-        ev["weather"][day] = {"wind": round(sum(x[0] for x in v) / n, 1), "gust": round(sum(x[1] for x in v) / n, 1),
+        # average direction the wind blows FROM, weighted by speed (compass degrees, 0 = north)
+        vx = sum(x[0] * math.sin(math.radians(x[4])) for x in v)
+        vy = sum(x[0] * math.cos(math.radians(x[4])) for x in v)
+        wdir = round(math.degrees(math.atan2(vx, vy)) % 360)
+        steady = round(math.hypot(vx, vy) / max(sum(x[0] for x in v), 1e-9), 2)
+        ev["weather"][day] = {"dir": wdir, "steady": steady, "wind": round(sum(x[0] for x in v) / n, 1), "gust": round(sum(x[1] for x in v) / n, 1),
                               "rain": round(sum(x[2] for x in v), 1), "temp": round(sum(x[3] for x in v) / n, 1)}
     return ev
 

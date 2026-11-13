@@ -13,6 +13,7 @@ HALF_LIFE_DAYS = 365.0   # a round one year old counts half as much as one playe
 SHRINK_ROUNDS = 6.0      # players with little history are pulled toward a "newcomer" level
 PRIOR = None             # skill assumed for a player with no history (None = measured newcomer average)
 SPREAD = 1.0             # <1 pulls every player toward average (guards against overconfidence)
+DIR_RIDGE = 3000.0       # how strongly per-course wind-direction effects are dampened (chosen by testing)
 WIND_REF, TEMP_REF = 8.0, 70.0
 
 
@@ -52,7 +53,7 @@ def load(cutoff=None):
             if not w:
                 continue
             k = rkeys.setdefault((ei, per), len(rkeys))
-            rows.append((r[0], ei, k, r[4], day, w["wind"], w["rain"], w["temp"], r[1]))
+            rows.append((r[0], ei, k, r[4], day, w["wind"], w["rain"], w["temp"], r[1], w.get("dir", 0.0)))
     return events, rows, rkeys
 
 
@@ -94,24 +95,34 @@ def fit(events, rows, rkeys, ref_date=None):
     r_wind = np.zeros(nR); r_wind[R] = wind
     r_rain = np.zeros(nR); r_rain[R] = rain
     r_temp = np.zeros(nR); r_temp[R] = temp
+    r_dir = np.zeros(nR); r_dir[R] = np.array([r[9] for r in rows], float)
+    r_day = np.zeros(nR, int); r_day[R] = days
     r_per = np.zeros(nR, int)
     for (ei, per), k in rkeys.items():
         r_per[k] = per
     cid = {}
     r_course = np.array([cid.setdefault(events[ei]["course"]["id"], len(cid)) for ei in r_event])
     nC = len(cid)
-    X = np.zeros((nR, nC + 4))
+    X = np.zeros((nR, 3 * nC + 4))
     X[np.arange(nR), r_course] = 1
+    # wind direction: each course gets its own "which way is the tough wind" effect, scaled by wind speed
+    th = np.radians(r_dir)
+    X[np.arange(nR), nC + 4 + r_course] = r_wind * np.cos(th)
+    X[np.arange(nR), 2 * nC + 4 + r_course] = r_wind * np.sin(th)
     X[:, nC] = r_wind - WIND_REF
     X[:, nC + 1] = np.minimum(r_rain, 15.0)
     X[:, nC + 2] = r_temp - TEMP_REF
     X[:, nC + 3] = (r_per >= 3)          # weekend rounds (tougher pins, pressure)
-    ridge = np.zeros(nC + 4); ridge[:nC] = 0.05
+    ridge = np.zeros(3 * nC + 4); ridge[:nC] = 0.05; ridge[nC + 4:] = DIR_RIDGE
     with np.errstate(all="ignore"):  # numpy on macOS prints spurious warnings for these products
         beta = np.linalg.solve(X.T @ (X * cntR[:, None]) + np.diag(ridge) * cntR.mean(), X.T @ (cntR * re_))
         r_pred = X @ beta
     course_base = beta[:nC]
-    b_wind, b_rain, b_temp, b_wkend = beta[nC:]
+    b_wind, b_rain, b_temp, b_wkend = beta[nC:nC + 4]
+    dir_a, dir_b = beta[nC + 4:2 * nC + 4], beta[2 * nC + 4:]
+    # typical direction effect per mph at each course, used when the direction is not specified
+    per_mph = dir_a[r_course] * np.cos(th) + dir_b[r_course] * np.sin(th)
+    dir_avg = np.bincount(r_course, cntR * r_wind * per_mph, minlength=nC) / np.maximum(np.bincount(r_course, cntR * r_wind, minlength=nC), 1e-9)
 
     # Step 4: luck. How much do scores scatter around expectation, and does wind widen it?
     e2 = (resid - skill[P]) ** 2
@@ -133,8 +144,9 @@ def fit(events, rows, rkeys, ref_date=None):
     wind_slope = raw * true_var / (true_var + noise_var)
 
     return dict(pid=pid, names=names, skill=skill, sd_mult=sd_mult, wind_slope=wind_slope, sw=sw, cntP=cntP,
-                cid=cid, course_base=course_base, b_wind=b_wind, b_rain=b_rain, b_temp=b_temp, b_wkend=b_wkend,
+                cid=cid, course_base=course_base, dir_a=dir_a, dir_b=dir_b, dir_avg=dir_avg, b_wind=b_wind, b_rain=b_rain, b_temp=b_temp, b_wkend=b_wkend,
                 v0=v0, v1=v1, newcomer=newcomer, prior=prior * SPREAD, true_var=true_var, re_=re_, r_pred=r_pred, cntR=cntR,
+                rd=dict(course=r_course, wind=r_wind, dir=r_dir, rain=r_rain, temp=r_temp, per=r_per, day=r_day, event=r_event),
                 ref=ref, last_day=np.array([np.max(days[P == i]) if cntP[i] else 0 for i in range(nP)]))
 
 
@@ -150,6 +162,9 @@ def describe(m):
     print("course+weather explains %.0f%% of round difficulty; typical miss %.2f strokes"
           % (100 * (1 - np.average(err ** 2, weights=m["cntR"]) / np.average((m["re_"] - np.average(m["re_"], weights=m["cntR"])) ** 2, weights=m["cntR"])),
              np.sqrt(np.average(err ** 2, weights=m["cntR"]))))
+    amp = np.hypot(m["dir_a"], m["dir_b"]) * 15
+    print("wind direction at 15 mph: toughest vs typical direction adds %.2f strokes at the median course, %.2f at the most affected"
+          % (np.median(amp), amp.max()))
     inv = {v: k for k, v in m["pid"].items()}
     act = [i for i in range(len(inv)) if m["sw"][i] > 15]
     top = sorted(act, key=lambda i: m["skill"][i])[:12]
@@ -181,6 +196,8 @@ def export(events, m):
         courses.append({"n": e["course"]["name"], "ev": e["name"], "yr": e["season"],
                         "loc": ", ".join(x for x in (a.get("city"), a.get("state") or a.get("country")) if x),
                         "par": e["course"]["par"], "b": round(float(m["course_base"][m["cid"][cid]]), 3),
+                        "da": round(float(m["dir_a"][m["cid"][cid]]), 5), "db": round(float(m["dir_b"][m["cid"][cid]]), 5),
+                        "dg": round(float(m["dir_avg"][m["cid"][cid]]), 5),
                         "cutRound": e.get("cutRound") or 0, "cutCount": cut_rule(e),
                         "major": e["major"], "f": field, "fx": n_unknown})
     courses.sort(key=lambda c: c["n"])

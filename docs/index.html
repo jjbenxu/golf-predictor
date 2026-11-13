@@ -21,6 +21,7 @@
   .lede { color: var(--muted); margin: 0 0 24px; max-width: 60ch; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
   form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+  form > div { min-width: 0; }
   label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 5px; }
   input, select { width: 100%; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
     border-radius: 9px; padding: 10px 12px; min-height: 44px; }
@@ -91,6 +92,17 @@
         </select>
       </div>
       <div>
+        <label for="dir">Wind direction (optional)</label>
+        <select id="dir">
+          <option value="">Not specified</option>
+          <option value="0">From the north</option><option value="45">From the northeast</option>
+          <option value="90">From the east</option><option value="135">From the southeast</option>
+          <option value="180">From the south</option><option value="225">From the southwest</option>
+          <option value="270">From the west</option><option value="315">From the northwest</option>
+        </select>
+        <div class="hint" id="dirHint"></div>
+      </div>
+      <div>
         <label for="back">Position after the cut (optional)</label>
         <select id="back">
           <option value="">Not specified</option>
@@ -102,7 +114,7 @@
         </select>
         <div class="hint">Sharpens the "win after making the cut" number.</div>
       </div>
-      <div style="align-self:center">
+      <div class="full">
         <button id="go" type="submit">Run the model</button>
       </div>
     </form>
@@ -145,6 +157,9 @@
       <li><b>Odds.</b> The tournament is played 10,000 times on your device against the players who entered the most
         recent edition at that course. Every player gets realistic round-to-round luck.</li>
       <li><b>Winning the round</b> means posting the lowest score of the day, including ties.</li>
+      <li><b>Wind direction is optional.</b> Each course has its own pattern, learned from past rounds. At most
+        courses it changes little; at a few exposed ones it is worth up to half a stroke in a strong wind. Leave it
+        unspecified to assume the usual wind for that course.</li>
       <li><b>Weather moves the score more than the odds.</b> Everyone plays in the same conditions, and the data showed
         no reliable sign that particular players gain or lose in wind. Wind does add randomness, which slightly trims
         favourites' chances.</li>
@@ -192,9 +207,31 @@
     $("courseHint").textContent = (c.loc ? c.loc + " · " : "") + "par " + c.par + " · plays " + fmtPar(c.b) +
       " for an average entrant · " + (c.cutRound ? "cut to top " + c.cutCount + " and ties" : "no cut");
   }
+  var COMPASS = ["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"];
+  // extra strokes from wind direction at this course (0 when the course shows no direction pattern)
+  function dirEffect(c, wind, dir) {
+    if (dir === null) return wind * c.dg;
+    var t = dir * Math.PI / 180;
+    return wind * (c.da * Math.cos(t) + c.db * Math.sin(t));
+  }
+  function dirHint() {
+    var c = M.courses[+$("course").value], wind = +$("wind").value, amp = Math.sqrt(c.da * c.da + c.db * c.db) * wind;
+    var tough = COMPASS[Math.round(((Math.atan2(c.db, c.da) * 180 / Math.PI + 360) % 360) / 45) % 8];
+    var v = $("dir").value;
+    if (amp < 0.05) { $("dirHint").textContent = "Direction makes almost no difference here at this wind speed."; return; }
+    var txt = "Toughest here: from the " + tough + " (about " + amp.toFixed(1) + " strokes harder than a neutral wind).";
+    if (v !== "") {
+      var d = dirEffect(c, wind, +v) - dirEffect(c, wind, null);
+      txt = "This direction plays " + (Math.abs(d) < 0.05 ? "about the same as" : Math.abs(d).toFixed(1) + " strokes " + (d > 0 ? "harder than" : "easier than")) +
+        " the usual wind here. Toughest: from the " + tough + ".";
+    }
+    $("dirHint").textContent = txt;
+  }
   $("player").addEventListener("input", playerHint);
-  $("course").addEventListener("change", courseHint);
-  playerHint(); courseHint();
+  $("course").addEventListener("change", function () { courseHint(); dirHint(); });
+  $("wind").addEventListener("change", dirHint);
+  $("dir").addEventListener("change", dirHint);
+  playerHint(); courseHint(); dirHint();
 
   var spare = null;
   function gauss() {
@@ -204,12 +241,12 @@
     var f = Math.sqrt(-2 * Math.log(r) / r); spare = v * f; return u * f;
   }
 
-  function simulate(pi, c, wind, temp, rain, back, N) {
+  function simulate(pi, c, wind, temp, rain, back, N, dir) {
     var ids = c.f.filter(function (i) { return i !== pi; });
     var n = ids.length + c.fx + 1, me = n - 1;
     var skill = new Float64Array(n), sd = new Float64Array(n);
     var dw = wind - C.windRef, baseSd = Math.sqrt(Math.max(C.v0 + C.v1 * dw, 4));
-    var cond = c.b + C.wind * dw + C.rain * rain + C.temp * (temp - C.tempRef);
+    var cond = c.b + C.wind * dw + C.rain * rain + C.temp * (temp - C.tempRef) + dirEffect(c, wind, dir);
     for (var i = 0; i < n; i++) {
       var p = i < ids.length ? M.players[ids[i]] : (i === me ? M.players[pi] : null);
       skill[i] = cond + (p ? p.s + p.w * dw : C.newcomer);
@@ -258,9 +295,10 @@
     var back = $("back").value === "" ? null : +$("back").value, btn = $("go");
     btn.disabled = true; btn.textContent = "Simulating…";
     setTimeout(function () {
-      var R = simulate(pi, c, wind, +w[0], +w[1], back, 10000), p = M.players[pi];
+      var dir = $("dir").value === "" ? null : +$("dir").value;
+      var R = simulate(pi, c, wind, +w[0], +w[1], back, 10000, dir), p = M.players[pi];
       $("ctx").textContent = p.n + " at " + c.n + " · " + $("weather").selectedOptions[0].text.toLowerCase() + ", " +
-        $("wind").selectedOptions[0].text.toLowerCase() + " · field of " + R.n + " based on the " + c.yr + " " + c.ev;
+        $("wind").selectedOptions[0].text.toLowerCase() + (dir === null ? "" : " " + $("dir").selectedOptions[0].text.toLowerCase()) + " · field of " + R.n + " based on the " + c.yr + " " + c.ev;
       $("score").innerHTML = R.mean.toFixed(1) + " <small>" + fmtPar(R.mean - c.par) + " on a par " + c.par + "</small>";
       var lo = Math.round(R.mean - 1.2816 * R.sd), hi = Math.round(R.mean + 1.2816 * R.sd);
       $("scoreSub").textContent = "Four rounds in five should land between " + lo + " and " + hi + ".";

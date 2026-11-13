@@ -49,7 +49,9 @@ def run(n_sims=4000, seed=1, verbose=True):
             day = (datetime.fromisoformat(e["date"][:10]) + timedelta(days=per - 1)).date().isoformat()
             w = e["weather"].get(day)
             if cidx is not None and w:
-                diff = (m["course_base"][cidx] + m["b_wind"] * (w["wind"] - b.WIND_REF) + m["b_rain"] * min(w["rain"], 15)
+                th = np.radians(w.get("dir", 0))
+                diff = (m["course_base"][cidx] + w["wind"] * (m["dir_a"][cidx] * np.cos(th) + m["dir_b"][cidx] * np.sin(th))
+                        + m["b_wind"] * (w["wind"] - b.WIND_REF) + m["b_rain"] * min(w["rain"], 15)
                         + m["b_temp"] * (w["temp"] - b.TEMP_REF) + (m["b_wkend"] if per >= 3 else 0))
                 abs_pred.append(diff + sk.mean()); abs_act.append(act.mean())
         # cut and win probabilities for standard events: one course, cut after round 2, four rounds played
