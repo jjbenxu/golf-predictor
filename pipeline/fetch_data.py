@@ -9,7 +9,8 @@ from datetime import datetime, timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "data", "events.json")
-SEASONS = range(2021, 2027)
+# tour code on the feed -> seasons to download (pga = PGA Tour, ntw = Korn Ferry, eur = DP World Tour, liv = LIV Golf)
+SOURCES = [("pga", range(2015, 2027)), ("ntw", range(2021, 2027)), ("eur", range(2021, 2027)), ("liv", range(2022, 2027))]
 UA = {"User-Agent": "Mozilla/5.0 (golf-hobby-project)"}
 
 
@@ -36,8 +37,17 @@ def to_par(disp):
         return None
 
 
-def fetch_event(ev_id):
-    d = get(f"https://site.web.api.espn.com/apis/site/v2/sports/golf/leaderboard?league=pga&event={ev_id}")
+def fetch_event(job):
+    try:
+        return _fetch_event(job)
+    except Exception as ex:      # one odd tournament should never stop the whole download
+        print("skipped", job, repr(ex), file=sys.stderr)
+        return None
+
+
+def _fetch_event(job):
+    tour, ev_id = job
+    d = get(f"https://site.web.api.espn.com/apis/site/v2/sports/golf/leaderboard?league={tour}&event={ev_id}")
     if not d or not d.get("events"):
         return None
     e = d["events"][0]
@@ -54,7 +64,7 @@ def fetch_event(ev_id):
     rounds, field = [], []
     for p in (e.get("competitions") or [{}])[0].get("competitors") or []:
         a = p.get("athlete")
-        if not a:
+        if not a or "id" not in a or "displayName" not in a:
             continue
         field.append(a["id"])
         for l in p.get("linescores", []):
@@ -64,16 +74,20 @@ def fetch_event(ev_id):
             # multi-course events: early rounds rotate across courses, so keep host-course rounds only
             if n_courses > 1 and per <= n_courses:
                 continue
-            if l.get("inScore") is None or l.get("outScore") is None or not (56 <= val <= 95):
+            nines = (l.get("inScore"), l.get("outScore"))
+            if (nines[0] is None) != (nines[1] is None) or not (56 <= val <= 95):
                 continue  # incomplete round (withdrawal)
+            if nines[0] is None and val < 60:
+                continue  # tours without nine-hole splits: treat very low totals as unfinished rounds
             tp = to_par(l.get("displayValue"))
             if tp is None:
                 continue
             rounds.append([a["id"], a["displayName"], per, int(val), tp, l.get("teeTime")])
     if len(rounds) < 60:
         return None
+    rounds_tour = tour
     return {
-        "id": e["id"], "name": e["name"], "date": e["date"], "end": e.get("endDate"),
+        "id": e["id"], "tour": rounds_tour, "name": e["name"], "date": e["date"], "end": e.get("endDate"),
         "season": e["season"]["year"], "major": bool(t.get("major")),
         "cutRound": t.get("cutRound"), "cutCount": t.get("cutCount"),
         "course": {"id": host["id"], "name": host["name"], "par": host.get("shotsToPar"),
@@ -161,15 +175,23 @@ def add_weather(ev):
 
 
 def main():
-    ids = []
-    for y in SEASONS:
-        d = get(f"https://site.api.espn.com/apis/site/v2/sports/golf/pga/scoreboard?dates={y}")
-        for c in d["leagues"][0]["calendar"]:
-            if c["id"] not in ids:
-                ids.append(c["id"])
-    print("tournaments listed:", len(ids))
-    with ThreadPoolExecutor(6) as ex:
-        events = [e for e in ex.map(fetch_event, ids) if e]
+    jobs, seen = [], set()
+    for tour, seasons in SOURCES:   # PGA Tour first, so shared events (majors) are filed under it
+        for y in seasons:
+            d = get(f"https://site.api.espn.com/apis/site/v2/sports/golf/{tour}/scoreboard?dates={y}")
+            for c in ((d or {}).get("leagues") or [{}])[0].get("calendar") or []:
+                if c["id"] not in seen:
+                    seen.add(c["id"])
+                    jobs.append((tour, c["id"]))
+    print("tournaments listed:", len(jobs))
+    with ThreadPoolExecutor(8) as ex:
+        fetched = [e for e in ex.map(fetch_event, jobs) if e]
+    events, keys = [], set()
+    for e in fetched:               # the same tournament can be listed by two tours under different ids
+        k = (e["course"]["id"], e["date"][:10])
+        if k not in keys:
+            keys.add(k)
+            events.append(e)
     print("usable stroke-play tournaments:", len(events))
     for e in events:  # geocode one at a time (cached), then weather in parallel
         geocode(e["course"]["address"])
@@ -181,9 +203,9 @@ def main():
     nr = sum(len(e["rounds"]) for e in events)
     nw = sum(1 for e in events if e["weather"])
     print(f"saved {len(events)} tournaments, {nr} rounds, weather for {nw}; {OUT}")
-    for e in events:
-        if not e["weather"]:
-            print("  no weather:", e["name"], e["course"]["address"])
+    for t in sorted({e["tour"] for e in events}):
+        print("  %s: %d tournaments, %d rounds" % (t, sum(e["tour"] == t for e in events), sum(len(e["rounds"]) for e in events if e["tour"] == t)))
+    print("  without weather (location unknown):", sum(1 for e in events if not e["weather"]))
 
 
 if __name__ == "__main__":

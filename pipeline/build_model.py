@@ -13,6 +13,8 @@ HALF_LIFE_DAYS = 365.0   # a round one year old counts half as much as one playe
 SHRINK_ROUNDS = 6.0      # players with little history are pulled toward a "newcomer" level
 PRIOR = None             # skill assumed for a player with no history (None = measured newcomer average)
 SPREAD = 1.0             # <1 pulls every player toward average (guards against overconfidence)
+TOURS = None             # which tours to learn from (None = all downloaded); the website only offers PGA Tour courses
+MIN_SEASON = 2021        # earliest season to learn from (older seasons tested worse: courses change over time)
 DIR_RIDGE = 3000.0       # how strongly per-course wind-direction effects are dampened (chosen by testing)
 WIND_REF, TEMP_REF = 8.0, 70.0
 
@@ -36,6 +38,8 @@ def load(cutoff=None):
     rows = []  # (player, event index, round key, to_par, date, wind, rain, temp)
     rkeys = {}
     for ei, e in enumerate(events):
+        if (TOURS and e.get("tour", "pga") not in TOURS) or e["season"] < MIN_SEASON:
+            continue
         off = e.get("utc_offset", 0)
         start = datetime.fromisoformat(e["date"][:10])
         per_dates = {}
@@ -77,14 +81,17 @@ def fit(events, rows, rkeys, ref_date=None):
     for _ in range(60):
         re_ = np.bincount(R, y - pe[P], minlength=nR) / np.maximum(cntR, 1)
         pe = np.bincount(P, y - re_[R], minlength=nP) / (cntP + 3.0)
-    shift = np.average(pe[P])            # zero = the average tour entrant
+    is_pga = np.array([events[ei].get("tour", "pga") == "pga" for ei in E])
+    shift = np.average(pe[P][is_pga])    # zero = the average PGA Tour entrant
     pe -= shift; re_ += shift
     resid = y - re_[R]                   # strokes vs the average entrant that day (negative = better)
 
     # Step 2: current skill = recency-weighted average, pulled toward a newcomer level when history is thin
     ref = ref_date or days.max()
     wt = 0.5 ** ((ref - days) / HALF_LIFE_DAYS)
-    newcomer = float(np.mean(resid[cntP[P] < 20])) if np.any(cntP[P] < 20) else 0.5
+    cnt_pga = np.bincount(P[is_pga], minlength=nP)       # rounds played on the PGA Tour itself
+    thin = is_pga & (cntP[P] < 20)                       # PGA Tour rounds by players with little history anywhere
+    newcomer = float(np.mean(resid[thin])) if np.any(thin) else 0.5
     sw = np.bincount(P, wt, minlength=nP)
     prior = PRIOR if PRIOR is not None else newcomer
     skill = (np.bincount(P, wt * resid, minlength=nP) + SHRINK_ROUNDS * prior) / (sw + SHRINK_ROUNDS)
@@ -114,8 +121,10 @@ def fit(events, rows, rkeys, ref_date=None):
     X[:, nC + 2] = r_temp - TEMP_REF
     X[:, nC + 3] = (r_per >= 3)          # weekend rounds (tougher pins, pressure)
     ridge = np.zeros(3 * nC + 4); ridge[:nC] = 0.05; ridge[nC + 4:] = DIR_RIDGE
+    # LIV rounds (shotgun starts, 54 holes) inform player skill but not the course and weather effects
+    wR = cntR * np.array([events[ei].get("tour", "pga") != "liv" for ei in r_event])
     with np.errstate(all="ignore"):  # numpy on macOS prints spurious warnings for these products
-        beta = np.linalg.solve(X.T @ (X * cntR[:, None]) + np.diag(ridge) * cntR.mean(), X.T @ (cntR * re_))
+        beta = np.linalg.solve(X.T @ (X * wR[:, None]) + np.diag(ridge) * wR.mean(), X.T @ (wR * re_))
         r_pred = X @ beta
     course_base = beta[:nC]
     b_wind, b_rain, b_temp, b_wkend = beta[nC:nC + 4]
@@ -143,11 +152,17 @@ def fit(events, rows, rkeys, ref_date=None):
     true_var = max(float(np.var(raw[big]) - np.mean(noise_var[big])), 0.0)
     wind_slope = raw * true_var / (true_var + noise_var)
 
-    return dict(pid=pid, names=names, skill=skill, sd_mult=sd_mult, wind_slope=wind_slope, sw=sw, cntP=cntP,
+    return dict(rows_used=rows, pid=pid, names=names, skill=skill, sd_mult=sd_mult, wind_slope=wind_slope, sw=sw, cntP=cntP,
                 cid=cid, course_base=course_base, dir_a=dir_a, dir_b=dir_b, dir_avg=dir_avg, b_wind=b_wind, b_rain=b_rain, b_temp=b_temp, b_wkend=b_wkend,
                 v0=v0, v1=v1, newcomer=newcomer, prior=prior * SPREAD, true_var=true_var, re_=re_, r_pred=r_pred, cntR=cntR,
                 rd=dict(course=r_course, wind=r_wind, dir=r_dir, rain=r_rain, temp=r_temp, per=r_per, day=r_day, event=r_event),
-                ref=ref, last_day=np.array([np.max(days[P == i]) if cntP[i] else 0 for i in range(nP)]))
+                ref=ref, cnt_pga=cnt_pga, last_day=_last_day(P[is_pga], days[is_pga], nP))
+
+
+def _last_day(P, days, nP):
+    out = np.zeros(nP, int)
+    np.maximum.at(out, P, days)
+    return out
 
 
 def describe(m):
@@ -177,12 +192,12 @@ def export(events, m):
     # courses on the current schedule = hosted an event in the last two seasons
     latest = {}
     for e in events:
-        if e["season"] >= 2025 and e["course"]["id"] in m["cid"] and "Q-School" not in e["name"]:
+        if e.get("tour", "pga") == "pga" and e["season"] >= 2025 and e["course"]["id"] in m["cid"] and "Q-School" not in e["name"]:
             latest[e["course"]["id"]] = e
     need = set()
     for e in latest.values():
         need.update(p for p in e["field"] if p in m["pid"])
-    selectable = {inv[i] for i in range(len(inv)) if m["cntP"][i] >= 12 and ref - m["last_day"][i] <= 500}
+    selectable = {inv[i] for i in range(len(inv)) if m["cnt_pga"][i] >= 12 and ref - m["last_day"][i] <= 500}
     keep = sorted(need | selectable, key=lambda p: m["skill"][m["pid"][p]])
     idx = {p: i for i, p in enumerate(keep)}
     players = [{"n": m["names"][p], "s": round(float(m["skill"][m["pid"][p]]), 3),
@@ -206,7 +221,7 @@ def export(events, m):
                     "temp": round(float(m["b_temp"]), 4), "wkend": round(float(m["b_wkend"]), 3),
                     "v0": round(float(m["v0"]), 3), "v1": round(float(m["v1"]), 4),
                     "windRef": WIND_REF, "tempRef": TEMP_REF, "newcomer": round(m["newcomer"], 3)},
-           "stats": {"events": len(events), "rounds": int(m["cntP"].sum())}}
+           "stats": {"events": len({r[1] for r in m["rows_used"]}), "rounds": int(m["cntP"].sum())}}
     os.makedirs(os.path.join(ROOT, "docs"), exist_ok=True)
     with open(os.path.join(ROOT, "docs", "model.js"), "w") as f:
         f.write("window.GOLF_MODEL = " + json.dumps(out, separators=(",", ":")) + ";\n")

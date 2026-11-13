@@ -8,7 +8,7 @@ Live site: https://jjbenxu.github.io/golf-predictor/
 
 ## How it works
 
-- **Score** = course difficulty + weather effect + player skill, fitted on PGA Tour rounds since 2021.
+- **Score** = course difficulty + weather effect + player skill, fitted on about 240,000 rounds since 2021 from the PGA Tour, Korn Ferry Tour, DP World Tour and LIV Golf.
 - **Odds** come from a Monte Carlo simulation that runs in the browser against the field from the
   most recent edition of the event.
 

@@ -183,8 +183,8 @@
   $("course").innerHTML = M.courses.map(function (c, i) {
     return '<option value="' + i + '">' + c.n + " (" + c.ev + ")</option>"; }).join("");
   $("player").value = M.players[0].n;
-  $("about").textContent = "Built from " + M.stats.rounds.toLocaleString() + " PGA Tour rounds across " + M.stats.events +
-    " tournaments since 2021, matched to the weather on the day. Results are current to " + M.asOf + ".";
+  $("about").textContent = "Built from " + M.stats.rounds.toLocaleString() + " professional rounds across " + M.stats.events +
+    " tournaments since 2021 (PGA Tour, Korn Ferry Tour, DP World Tour and LIV Golf), matched to the weather on the day. Results are current to " + M.asOf + ".";
   $("foot").textContent = "Scores from public leaderboards; weather from Open-Meteo. A hobby project.";
 
   function fmtPar(x) { var r = Math.round(x * 10) / 10; return r === 0 ? "level par" : (r > 0 ? "+" : "−") + Math.abs(r).toFixed(1); }

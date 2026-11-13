@@ -17,7 +17,9 @@ def run(n_sims=4000, seed=1, verbose=True):
             fits[cut] = b.fit(ev_, rows_, rk_, ref_date=datetime.fromisoformat(cut).toordinal())
         return fits[cut]
 
+    keep = (b.TOURS, b.MIN_SEASON); b.TOURS, b.MIN_SEASON = None, 0
     all_events, all_rows, _ = b.load()
+    b.TOURS, b.MIN_SEASON = keep
     rng = np.random.default_rng(seed)
 
     m = None
@@ -36,6 +38,8 @@ def run(n_sims=4000, seed=1, verbose=True):
     n_ev = 0
     for ei, rounds in test.items():
         e = all_events[ei]
+        if e.get("tour", "pga") != "pga":
+            continue                    # the test is always: how well do we predict PGA Tour events
         m = model_for(e["date"][:10])
         cidx = m["cid"].get(e["course"]["id"])
         by_per = {}
