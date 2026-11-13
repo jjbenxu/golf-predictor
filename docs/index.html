@@ -103,7 +103,7 @@
         <div class="hint" id="dirHint"></div>
       </div>
       <div>
-        <label for="back">Position after the cut (optional)</label>
+        <label for="back">Position going into the closing rounds (optional)</label>
         <select id="back">
           <option value="">Not specified</option>
           <option value="0">Tied for the lead</option>
@@ -112,7 +112,7 @@
           <option value="5">5 shots back</option><option value="6">6 shots back</option>
           <option value="8">8 shots back</option><option value="10">10 shots back</option>
         </select>
-        <div class="hint">Sharpens the "win after making the cut" number.</div>
+        <div class="hint">Sharpens the chance of winning the tournament.</div>
       </div>
       <div class="full">
         <button id="go" type="submit">Run the model</button>
@@ -141,7 +141,7 @@
         <div class="s" id="cutSub"></div>
       </div>
       <div class="card full">
-        <div class="k">4 · Chance of winning the tournament, having made the cut</div>
+        <div class="k" id="winTitle">4 · Chance of winning the tournament, having made the cut</div>
         <div class="v" id="win"></div>
         <div class="s" id="winSub"></div>
       </div>
@@ -315,16 +315,17 @@
       $("hist").innerHTML = bars; $("axis").innerHTML = ax;
       $("low").textContent = pct(R.low);
       $("lowSub").textContent = "Lowest score of the day, ties included, against " + (R.n - 1) + " others.";
-      if (R.cut === null) { $("cut").textContent = "No cut"; $("cutSub").textContent = "Everyone in this event plays all four rounds."; }
+      if (R.cut === null) { $("cut").textContent = "100%"; $("cutSub").textContent = "This event has no cut. All " + R.n + " players play all four rounds."; }
       else { $("cut").textContent = pct(R.cut); $("cutSub").textContent = "Top " + c.cutCount + " and ties after round " + c.cutRound + "."; }
+      $("winTitle").textContent = R.cut === null ? "4 · Chance of winning the tournament" : "4 · Chance of winning the tournament, having made the cut";
       if (back !== null) {
         $("win").textContent = pct(R.winBack);
         $("winSub").textContent = "Starting the closing rounds " + $("back").selectedOptions[0].text.toLowerCase() +
-          ". Without that information: " + pct(R.winGivenCut) + ". From the first tee: " + pct(R.win) + ".";
+          (R.cut === null ? "." : ". Without that information: " + pct(R.winGivenCut) + ".") + " From the first tee: " + pct(R.win) + ".";
       } else {
         $("win").textContent = pct(R.winGivenCut);
-        $("winSub").textContent = (R.cut === null ? "" : "Averaged over every way the first rounds could go. ") +
-          "From the first tee: " + pct(R.win) + ". Ties are settled by a coin-flip playoff.";
+        $("winSub").textContent = R.cut === null ? "From the first tee, with no cut to survive. Ties are settled by a coin-flip playoff."
+          : "Averaged over every way the first rounds could go. From the first tee: " + pct(R.win) + ". Ties are settled by a coin-flip playoff.";
       }
       $("results").style.display = "block";
       btn.disabled = false; btn.textContent = "Run the model";
